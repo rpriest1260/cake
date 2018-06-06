@@ -16,6 +16,7 @@ namespace Cake.Common.Solution.Project
     /// </summary>
     public sealed class ProjectParser
     {
+        private static readonly char[] _wildcardPathCharacters = { '*', '?' };
         private readonly IFileSystem _fileSystem;
         private readonly ICakeEnvironment _environment;
 
@@ -138,13 +139,43 @@ namespace Cake.Common.Solution.Project
                  from include in element.Attributes("Include")
                  let value = include.Value
                  where !string.IsNullOrEmpty(value)
+                 && !value.Any(ch => _wildcardPathCharacters.Contains(ch))
                  let filePath = rootPath.CombineWithFilePath(value)
                  select new ProjectFile
                  {
                      FilePath = filePath,
                      RelativePath = value,
                      Compile = element.Name == ProjectXElement.Compile
-                 }).ToArray();
+                 }).ToList();
+
+            var globber = new Globber(_fileSystem, _environment);
+            var globResolvedProjectFiles =
+                (from project in document.Elements(ProjectXElement.Project)
+                 from itemGroup in project.Elements(ProjectXElement.ItemGroup)
+                 from element in itemGroup.Elements()
+                 where element.Name != ProjectXElement.Reference &&
+                       element.Name != ProjectXElement.Import &&
+                       element.Name != ProjectXElement.BootstrapperPackage &&
+                       element.Name != ProjectXElement.ProjectReference &&
+                       element.Name != ProjectXElement.Service
+                 from include in element.Attributes("Include")
+                 let value = include.Value
+                 where !string.IsNullOrEmpty(value)
+                 && value.Any(ch => _wildcardPathCharacters.Contains(ch))
+                 let globbedFiles = System.IO.Path.IsPathRooted(value) ? globber.GetFiles(value.Replace('\\', '/'))
+                    : globber.GetFiles(String.Format("{0}/{1}", rootPath, value.Replace('\\', '/')))
+                 from gfile in globbedFiles
+                 select new ProjectFile
+                     {
+                         FilePath = gfile,
+                         RelativePath = gfile.FullPath.Replace(rootPath.FullPath, string.Empty).TrimStart(new char[] { '\\', '/' }),
+                         Compile = element.Name == ProjectXElement.Compile
+                     }).ToArray();
+
+            if (globResolvedProjectFiles != null)
+                {
+                projectFiles.AddRange(globResolvedProjectFiles);
+                }
 
             var references =
                 (from project in document.Elements(ProjectXElement.Project)
